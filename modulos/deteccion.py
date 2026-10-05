@@ -18,11 +18,7 @@ CARPETA_PROYECTO = os.path.dirname(
 
 RUTA_MODELO = os.path.join(
     CARPETA_PROYECTO,
-    "runs",
-    "detect",
-    "runs",
-    "supervision_examenes",
-    "weights",
+    "modelo_ia",
     "best.pt"
 )
 
@@ -49,19 +45,14 @@ CLASES = {
 # UMBRALES POR CLASE
 # ==========================================================
 
-# Objetos que queremos detectar con mayor facilidad
 UMBRAL = {
     "persona": 0.20,
     "mochila": 0.15,
     "telefono": 0.15,
     "audifonos": 0.15,
     "reloj": 0.15,
-
-    # Subimos estos porque estaban produciendo
-    # falsos positivos en la pared.
     "cuaderno": 0.80,
     "libro": 0.80,
-
     "laptop": 0.25
 }
 
@@ -89,7 +80,6 @@ def detectar_objetos(frame):
         for caja in resultado.boxes:
 
             confianza = float(caja.conf[0])
-
             clase_id = int(caja.cls[0])
 
             if clase_id not in CLASES:
@@ -97,13 +87,11 @@ def detectar_objetos(frame):
 
             nombre = CLASES[clase_id]
 
-            # Umbral específico de cada clase
             umbral_clase = UMBRAL.get(
                 nombre,
                 0.25
             )
 
-            # Ignorar detecciones poco confiables
             if confianza < umbral_clase:
                 continue
 
