@@ -2,7 +2,7 @@
 
 Descargar Python 3.12:
 
-https://www.python.org/downloads/
+[https://www.python.org/downloads/](https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe)
 
 Durante la instalacion marcar:
 
