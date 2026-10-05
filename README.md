@@ -1,3 +1,31 @@
+# Sistema de Supervision Inteligente
+
+Sistema de supervision de examenes mediante inteligencia artificial y vision por computadora.
+
+## ¿De que trata el proyecto?
+
+El proyecto busca apoyar la supervision de evaluaciones mediante una camara y un modelo de inteligencia artificial entrenado con YOLO.
+
+El sistema analiza en tiempo real lo que aparece frente a la camara y permite detectar diferentes elementos relacionados con el estudiante.
+
+### ¿Que hace?
+
+- Detecta personas.
+- Detecta mochilas.
+- Detecta telefonos.
+- Detecta cuadernos/libros.
+- Detecta audifonos.
+- Detecta relojes.
+- Detecta laptops.
+- Muestra las detecciones mediante cuadros de colores.
+- Los elementos permitidos se muestran en azul.
+- Los elementos no permitidos se muestran en rojo.
+- Inicia un contador cuando detecta un elemento no permitido.
+- Si permanece durante 5 segundos, genera una alerta.
+- Guarda una captura de la alerta.
+- Reproduce un sonido de alerta.
+- El contador se reinicia cuando el elemento deja de ser detectado.
+
 ### 1. Instalar Python
 
 Descargar Python 3.12:
