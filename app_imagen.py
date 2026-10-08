@@ -5,7 +5,6 @@
 # ============================================================
 
 import os
-import hmac
 import json
 import socket
 
@@ -90,50 +89,6 @@ div[data-testid="stMetric"] {
 }
 </style>
 """, unsafe_allow_html=True)
-
-
-# ============================================================
-# ACCESO
-# ============================================================
-
-def verificar_acceso():
-
-    if st.session_state.get("autenticado"):
-        return
-
-    try:
-        credenciales = st.secrets["acceso"]
-    except (KeyError, FileNotFoundError):
-        # Sin credenciales configuradas, la pagina queda abierta
-        st.session_state["autenticado"] = True
-        return
-
-    _, centro, _ = st.columns([1, 1.2, 1])
-
-    with centro:
-
-        st.markdown("<div style='height:12vh'></div>", unsafe_allow_html=True)
-        st.markdown("## 🖼️ Modulo IMAGEN")
-        st.caption("Sistema de Supervision de Examenes")
-
-        with st.form("acceso"):
-
-            usuario = st.text_input("Usuario")
-            clave = st.text_input("Contrasena", type="password")
-
-            if st.form_submit_button("Ingresar", width="stretch"):
-
-                if (hmac.compare_digest(usuario, credenciales["usuario"])
-                        and hmac.compare_digest(clave, credenciales["clave"])):
-                    st.session_state["autenticado"] = True
-                    st.rerun()
-
-                st.error("Usuario o contrasena incorrectos")
-
-    st.stop()
-
-
-verificar_acceso()
 
 
 # ============================================================
@@ -232,13 +187,14 @@ def mostrar_analisis(resultado, clave):
     with pestanas[0]:
 
         st.caption(
-            "Fotograma y detecciones entregados por VIDEO (su modelo best.pt, sin cambios)."
+            "Fotograma y detecciones tal como los entrego VIDEO (su modelo best.pt, sin cambios). "
+            "La simulacion de condiciones de captura no afecta a esta pestana."
         )
 
         c1, c2 = st.columns([3, 2])
 
         with c1:
-            mostrar(dibujar_video(imagenes["capturado"], registro["detecciones"]),
+            mostrar(dibujar_video(imagenes["original"], registro["detecciones"]),
                     f"{registro['origen']} · {registro['ancho']}x{registro['alto']}")
 
         with c2:
@@ -286,13 +242,13 @@ def mostrar_analisis(resultado, clave):
         c1, c2 = st.columns(2)
 
         with c1:
-            mostrar(imagenes["capturado"], "Capturado")
+            mostrar(imagenes["capturado"], "Recibido por IMAGEN")
         with c2:
             mostrar(imagenes["preprocesado"], "Preprocesado")
 
         st.markdown("**Histograma de intensidades**")
         st.line_chart(pd.DataFrame({
-            "capturado": histograma_gris(imagenes["capturado"]),
+            "recibido": histograma_gris(imagenes["capturado"]),
             "preprocesado": histograma_gris(imagenes["preprocesado"])
         }), color=["#64748B", "#2DD4BF"])
 
@@ -398,18 +354,19 @@ def mostrar_analisis(resultado, clave):
     with pestanas[5]:
 
         st.caption(
-            "El mismo modelo de VIDEO se ejecuta sobre el fotograma antes y despues "
-            "del procesamiento de IMAGEN, y se comparan los resultados."
+            "El mismo modelo de VIDEO se ejecuta sobre la imagen que recibe IMAGEN (antes) "
+            "y sobre la imagen procesada (despues). Cada objeto que VIDEO entrego se busca "
+            "en ambas: confirmada, no confirmada, recuperada o no detectada."
         )
 
         c1, c2 = st.columns(2)
 
         with c1:
-            mostrar(dibujar_video(imagenes["capturado"], registro["detecciones"]),
-                    "VIDEO sobre el fotograma capturado")
+            mostrar(dibujar_video(imagenes["capturado"], resultado["detecciones_capturado"]),
+                    "Antes: VIDEO sobre la imagen recibida")
         with c2:
             mostrar(dibujar_verificadas(imagenes["mejorado"], [o["deteccion"] for o in objetos]),
-                    "VIDEO sobre el fotograma procesado")
+                    "Despues: VIDEO sobre la imagen procesada por IMAGEN")
 
         comparacion = resultado["resumen"]["comparacion_video"]
 
@@ -427,8 +384,9 @@ def mostrar_analisis(resultado, clave):
                 {
                     "id": o["id"],
                     "clase": o["deteccion"]["clase"],
-                    "confianza antes": o["deteccion"]["confianza_video"],
-                    "confianza despues": o["deteccion"]["confianza_procesada"],
+                    "VIDEO original": o["deteccion"]["confianza_video"],
+                    "antes (recibida)": o["deteccion"]["confianza_capturada"],
+                    "despues (procesada)": o["deteccion"]["confianza_procesada"],
                     "variacion": o["deteccion"]["variacion_confianza"],
                     "estado": o["deteccion"]["estado"]
                 }
@@ -496,7 +454,7 @@ with st.sidebar:
 
     oscuridad = st.slider("Poca luz", 0.0, 0.9, 0.0, 0.05)
     ruido_simulado = st.slider("Ruido de sensor", 0, 60, 0, 5)
-    desenfoque = st.slider("Desenfoque", 0, 21, 0, 2)
+    desenfoque = st.slider("Desenfoque", 0, 21, 0, 1)
 
     st.markdown("**Segmentacion**")
     segmentacion = st.selectbox(
@@ -509,10 +467,6 @@ with st.sidebar:
     st.divider()
     st.markdown("**Acceso desde otra PC (misma red)**")
     st.code(f"http://{ip_local()}:8501", language=None)
-
-    if st.session_state.get("autenticado") and st.button("Cerrar sesion", width="stretch"):
-        st.session_state.clear()
-        st.rerun()
 
 
 opciones = {

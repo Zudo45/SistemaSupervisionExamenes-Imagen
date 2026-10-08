@@ -74,7 +74,7 @@ def evaluar(paquetes, escenarios=None, opciones=None, progreso=None):
             fila = {
                 "origen": paquete["origen"],
                 "escenario": nombre,
-                **_resumir(resultado["registro_video"]["detecciones"], "antes"),
+                **_resumir(resultado["detecciones_capturado"], "antes"),
                 **_resumir(resultado["detecciones_despues"], "despues"),
                 "mantenidas": comparacion["mantenidas"],
                 "perdidas": comparacion["perdidas"],

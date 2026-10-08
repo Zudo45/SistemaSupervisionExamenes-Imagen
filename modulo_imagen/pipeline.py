@@ -5,7 +5,7 @@
 # ============================================================
 
 from modulo_imagen.config_imagen import CLASES_NO_PERMITIDAS
-from modulo_imagen.recepcion import recibir_de_video
+from modulo_imagen.recepcion import recibir_de_video, detectar_objetos
 from modulo_imagen.preprocesamiento import preprocesar, degradar
 from modulo_imagen.mejoramiento import mejorar
 from modulo_imagen.calidad import medir_calidad, comparar_con_referencia
@@ -177,7 +177,20 @@ def procesar_frame(paquete, opciones=None):
     # 1. Recepcion: salida del grupo VIDEO
     # --------------------------------------------------------
 
-    registro = recibir_de_video({**paquete, "frame": capturado})
+    # Lo que VIDEO entrego: su deteccion sobre el fotograma original
+    registro = recibir_de_video(paquete)
+
+    # Salida de VIDEO sobre el fotograma que recibe IMAGEN. Solo difiere
+    # de la original si se simulan malas condiciones de captura.
+    simulacion = bool(op["oscuridad"] or op["ruido_simulado"] or op["desenfoque"])
+
+    if simulacion:
+        detecciones_capturado = [
+            {**d, "confianza": round(float(d["confianza"]), 4)}
+            for d in detectar_objetos(capturado.copy())
+        ]
+    else:
+        detecciones_capturado = registro["detecciones"]
 
     calidad_capturado = medir_calidad(capturado)
 
@@ -216,7 +229,9 @@ def procesar_frame(paquete, opciones=None):
     # 4. Verificacion: mismo modelo de VIDEO antes y despues
     # --------------------------------------------------------
 
-    verificadas, detecciones_despues = verificar(mejorado, registro["detecciones"])
+    verificadas, detecciones_despues = verificar(
+        mejorado, registro["detecciones"], detecciones_capturado
+    )
 
     # --------------------------------------------------------
     # 5. Segmentacion + 6. Caracteristicas
@@ -248,7 +263,7 @@ def procesar_frame(paquete, opciones=None):
         "mejorado": medir_calidad(mejorado)
     }
 
-    if op["oscuridad"] or op["ruido_simulado"] or op["desenfoque"]:
+    if simulacion:
         calidad["vs_original"] = {
             "capturado": comparar_con_referencia(original, capturado),
             "mejorado": comparar_con_referencia(original, mejorado)
@@ -274,8 +289,10 @@ def procesar_frame(paquete, opciones=None):
         "confirmadas": estados.count("confirmada"),
         "no_confirmadas": estados.count("no_confirmada"),
         "objetos_no_permitidos_video": sorted(set(no_permitidos)),
+        "recuperadas": estados.count("recuperada"),
+        "no_detectadas": estados.count("no_detectada"),
         "comparacion_video": comparar_salidas(
-            registro["detecciones"], detecciones_despues
+            detecciones_capturado, detecciones_despues
         )
     }
 
@@ -289,6 +306,7 @@ def procesar_frame(paquete, opciones=None):
             "preprocesado": preprocesado,
             "mejorado": mejorado
         },
+        "detecciones_capturado": detecciones_capturado,
         "detecciones_despues": detecciones_despues,
         "objetos": objetos,
         "calidad": calidad,

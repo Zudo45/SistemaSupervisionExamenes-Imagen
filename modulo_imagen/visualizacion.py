@@ -11,7 +11,9 @@ import numpy as np
 COLORES_ESTADO = {
     "video": (255, 140, 0),          # azul: deteccion original
     "confirmada": (60, 180, 60),     # verde
-    "no_confirmada": (0, 165, 255)   # naranja
+    "no_confirmada": (0, 165, 255),  # naranja
+    "recuperada": (220, 0, 220),     # magenta
+    "no_detectada": (128, 128, 128)  # gris
 }
 
 
@@ -56,9 +58,13 @@ def dibujar_verificadas(imagen, verificadas):
     for d in verificadas:
 
         if d["estado"] == "confirmada":
-            texto = f"{d['clase']} {d['confianza_video']:.2f}->{d['confianza_procesada']:.2f}"
+            texto = f"{d['clase']} {d['confianza_capturada']:.2f}->{d['confianza_procesada']:.2f}"
+        elif d["estado"] == "recuperada":
+            texto = f"{d['clase']} 0->{d['confianza_procesada']:.2f} (recuperada)"
+        elif d["estado"] == "no_confirmada":
+            texto = f"{d['clase']} {d['confianza_capturada']:.2f} (no confirmada)"
         else:
-            texto = f"{d['clase']} {d['confianza_video']:.2f} (no confirmada)"
+            texto = f"{d['clase']} (no detectada)"
 
         dibujar_caja(salida, d, COLORES_ESTADO[d["estado"]], texto)
 

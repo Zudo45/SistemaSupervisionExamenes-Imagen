@@ -4,9 +4,8 @@
 #   1. Se toman las detecciones de VIDEO sobre el frame capturado.
 #   2. Se ejecuta el MISMO modelo de VIDEO (best.pt, sin cambios)
 #      sobre el frame procesado por IMAGEN.
-#   3. Se emparejan ambas salidas y se compara la confianza:
-#      confirmada (se mantiene tras el procesamiento) o
-#      no confirmada (desaparece tras el procesamiento).
+#   3. Se emparejan ambas salidas con las detecciones originales de
+#      VIDEO y se compara la confianza (ver verificar()).
 # ============================================================
 
 from modulo_imagen.config_imagen import (
@@ -55,16 +54,22 @@ def emparejar(antes, despues):
     return asignados
 
 
-def verificar(frame_procesado, detecciones_video):
+def verificar(frame_procesado, referencia, detecciones_capturado):
     """
     frame_procesado: frame tras preprocesamiento y mejora
-    detecciones_video: detecciones de VIDEO sobre el frame capturado
+    referencia: detecciones originales de VIDEO (lo que entrego VIDEO)
+    detecciones_capturado: salida de VIDEO sobre el frame que recibe
+                           IMAGEN (igual a `referencia` si no hay
+                           simulacion de condiciones de captura)
 
-    Devuelve (verificadas, detecciones_despues):
-      verificadas: las detecciones de VIDEO con la confianza antes y
-                   despues del procesamiento y su estado
-      detecciones_despues: salida completa de VIDEO sobre el frame
-                           procesado (para las metricas)
+    Para cada objeto de la referencia se busca si VIDEO lo sigue viendo
+    en el frame recibido (antes) y en el frame procesado (despues):
+      confirmada:    lo ve antes y despues
+      no_confirmada: lo ve antes, pero no despues del procesamiento
+      recuperada:    no lo ve antes, pero si despues del procesamiento
+      no_detectada:  no lo ve ni antes ni despues
+
+    Devuelve (verificadas, detecciones_despues).
     """
 
     detecciones_despues = [
@@ -72,35 +77,35 @@ def verificar(frame_procesado, detecciones_video):
         for d in detectar_objetos(frame_procesado.copy())
     ]
 
-    pares = emparejar(detecciones_video, detecciones_despues)
+    pares_antes = emparejar(referencia, detecciones_capturado)
+    pares_despues = emparejar(referencia, detecciones_despues)
 
     verificadas = []
 
-    for i, original in enumerate(detecciones_video):
+    for i, original in enumerate(referencia):
 
-        if i in pares:
+        antes = detecciones_capturado[pares_antes[i]]["confianza"] if i in pares_antes else 0.0
+        despues = detecciones_despues[pares_despues[i]] if i in pares_despues else None
+        conf_despues = despues["confianza"] if despues else 0.0
 
-            despues = detecciones_despues[pares[i]]
-
-            verificadas.append({
-                **original,
-                "confianza_video": original["confianza"],
-                "confianza_procesada": despues["confianza"],
-                "variacion_confianza": round(despues["confianza"] - original["confianza"], 4),
-                "estado": "confirmada",
-                "iou_verificacion": round(iou(original, despues), 3)
-            })
-
+        if antes and despues:
+            estado = "confirmada"
+        elif antes:
+            estado = "no_confirmada"
+        elif despues:
+            estado = "recuperada"
         else:
+            estado = "no_detectada"
 
-            verificadas.append({
-                **original,
-                "confianza_video": original["confianza"],
-                "confianza_procesada": 0.0,
-                "variacion_confianza": round(-original["confianza"], 4),
-                "estado": "no_confirmada",
-                "iou_verificacion": 0.0
-            })
+        verificadas.append({
+            **original,
+            "confianza_video": original["confianza"],
+            "confianza_capturada": antes,
+            "confianza_procesada": conf_despues,
+            "variacion_confianza": round(conf_despues - antes, 4),
+            "estado": estado,
+            "iou_verificacion": round(iou(original, despues), 3) if despues else 0.0
+        })
 
     return verificadas, detecciones_despues
 

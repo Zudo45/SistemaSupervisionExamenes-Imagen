@@ -12,7 +12,8 @@ from datetime import datetime
 
 CAMPOS_DETECCION = (
     "clase", "x1", "y1", "x2", "y2",
-    "confianza_video", "confianza_procesada", "variacion_confianza",
+    "confianza_video", "confianza_capturada", "confianza_procesada",
+    "variacion_confianza",
     "estado", "iou_verificacion"
 )
 
