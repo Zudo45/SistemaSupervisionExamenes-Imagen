@@ -35,6 +35,7 @@ OPCIONES_POR_DEFECTO = {
     "alfa": 1.0,
     "beta": 0,
     "nitidez": 0.5,
+    "sigma_nitidez": 2.0,
 
     # Segmentacion
     "segmentacion": "grabcut"
@@ -46,6 +47,7 @@ RUIDO_ALTO = 8.0
 RUIDO_MEDIO = 3.0
 BRILLO_BAJO = 80.0
 NITIDEZ_BAJA = 50.0
+NITIDEZ_MUY_BAJA = 15.0
 BRILLO_REFERENCIA = 128.0
 CONTRASTE_BAJO = 40.0
 
@@ -132,11 +134,17 @@ def decidir_opciones(calidad):
 
     # Nitidez. En una imagen oscura la varianza del Laplaciano
     # tambien es baja, por eso solo se evalua si no es oscura.
-    if not oscura and nitidez < NITIDEZ_BAJA and ruido <= RUIDO_MEDIO:
-        opciones["nitidez"] = 0.6
+    if not oscura and nitidez < NITIDEZ_MUY_BAJA and ruido <= RUIDO_MEDIO:
+        opciones.update({"nitidez": 1.2, "sigma_nitidez": 3.0})
+        decisiones.append(
+            f"Imagen muy borrosa (var. Laplaciano={nitidez:.0f}): "
+            "mascara de desenfoque fuerte (cantidad 1.2, radio 3)"
+        )
+    elif not oscura and nitidez < NITIDEZ_BAJA and ruido <= RUIDO_MEDIO:
+        opciones.update({"nitidez": 0.8, "sigma_nitidez": 2.5})
         decisiones.append(
             f"Imagen borrosa (var. Laplaciano={nitidez:.0f}): "
-            "mascara de desenfoque (unsharp masking)"
+            "mascara de desenfoque (cantidad 0.8, radio 2.5)"
         )
     elif not ruidosa and "nitidez" not in opciones:
         opciones["nitidez"] = 0.3
@@ -200,7 +208,8 @@ def procesar_frame(paquete, opciones=None):
         contraste=op["contraste"],
         alfa=op["alfa"],
         beta=op["beta"],
-        nitidez=op["nitidez"]
+        nitidez=op["nitidez"],
+        sigma_nitidez=op["sigma_nitidez"]
     )
 
     # --------------------------------------------------------

@@ -119,10 +119,13 @@ def mejorar(
     contraste="estiramiento",
     alfa=1.0,
     beta=0,
-    nitidez=0.8
+    nitidez=0.8,
+    sigma_nitidez=2.0
 ):
     """
     contraste: ninguno | estiramiento | manual
+    sigma_nitidez: radio del desenfoque que se compensa (mayor para
+                   imagenes mas borrosas)
     """
 
     if contraste == "estiramiento":
@@ -132,4 +135,4 @@ def mejorar(
     else:
         resultado = imagen.copy()
 
-    return enfocar(resultado, nitidez)
+    return enfocar(resultado, nitidez, sigma_nitidez)

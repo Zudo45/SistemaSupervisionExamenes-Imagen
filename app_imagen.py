@@ -174,19 +174,13 @@ def procesar(paquete, opciones):
     return procesar_frame(paquete, dict(opciones))
 
 
-@st.cache_data(show_spinner="Analizando alerta...")
-def procesar_alerta_detalle(nombre_archivo, modificado):
+@st.cache_data(show_spinner=False)
+def cargar_alerta(nombre_archivo, modificado):
     """
-    Resultado completo (con imagenes intermedias) de una alerta.
     `modificado` invalida la cache si el archivo cambia.
     """
 
-    paquete = vigilante.cargar_paquete(nombre_archivo)
-
-    if paquete is None:
-        return None
-
-    return procesar_frame(paquete)
+    return vigilante.cargar_paquete(nombre_archivo)
 
 
 def tabla_calidad(calidad):
@@ -486,7 +480,30 @@ with st.sidebar:
     fuente = st.radio(
         "Fuente",
         ["Alertas de VIDEO", "Imagenes de prueba"],
-        captions=["Capturas de la alarma de VIDEO", "Experimentos y respaldo"]
+        captions=["Capturas de la alarma de VIDEO", "Imagenes de respaldo"]
+    )
+
+    nombre_prueba = None
+
+    if fuente == "Imagenes de prueba":
+        nombre_prueba = st.selectbox(
+            "Imagen", [p["origen"] for p in cargar_imagenes_prueba()]
+        )
+
+    st.divider()
+    st.markdown("**Condiciones de captura (simulacion)**")
+    st.caption("Empeoran la captura a proposito para ver como la recupera IMAGEN.")
+
+    oscuridad = st.slider("Poca luz", 0.0, 0.9, 0.0, 0.05)
+    ruido_simulado = st.slider("Ruido de sensor", 0, 60, 0, 5)
+    desenfoque = st.slider("Desenfoque", 0, 21, 0, 2)
+
+    st.markdown("**Segmentacion**")
+    segmentacion = st.selectbox(
+        "Metodo de segmentacion",
+        ["grabcut", "otsu"],
+        format_func={"grabcut": "GrabCut (modelos de color)", "otsu": "Otsu (umbral automatico)"}.get,
+        label_visibility="collapsed"
     )
 
     st.divider()
@@ -496,6 +513,18 @@ with st.sidebar:
     if st.session_state.get("autenticado") and st.button("Cerrar sesion", width="stretch"):
         st.session_state.clear()
         st.rerun()
+
+
+opciones = {
+    "oscuridad": oscuridad,
+    "ruido_simulado": ruido_simulado,
+    "desenfoque": desenfoque,
+    "segmentacion": segmentacion
+}
+
+opciones_clave = tuple(sorted({**OPCIONES_POR_DEFECTO, **opciones}.items()))
+
+simulacion_activa = bool(oscuridad or ruido_simulado or desenfoque)
 
 
 # ============================================================
@@ -651,148 +680,201 @@ def panel_alertas():
         st.rerun()
 
 
-if fuente == "Alertas de VIDEO":
+# ============================================================
+# EVALUACION COMPARATIVA (comun a ambos modos)
+# ============================================================
 
-    panel_alertas()
+def seccion_evaluacion(paquetes, ruta_detalle, descripcion):
 
-    archivo = st.session_state.get("archivo_actual")
-    ruta = os.path.join(CARPETA_ALERTAS_VIDEO, archivo) if archivo else None
+    st.markdown("### Evaluacion comparativa")
+    st.caption(
+        f"{descripcion} Cada imagen se degrada en 5 escenarios (normal, poca luz, ruido, "
+        "desenfoque, luz+ruido) y se compara la salida del modelo de VIDEO antes y "
+        "despues del procesamiento de IMAGEN."
+    )
 
-    if ruta and os.path.exists(ruta):
+    if len(paquetes) < 2:
+        st.info(
+            f"Hay {len(paquetes)} imagen(es). La evaluacion funciona, pero los promedios "
+            "son mas representativos con 2 o mas."
+        )
 
-        st.divider()
-        st.markdown(f"### Analisis de IMAGEN · `{archivo}`")
+    if paquetes and st.button(f"Ejecutar evaluacion ({len(paquetes)} imagenes)", type="primary"):
 
-        resultado = procesar_alerta_detalle(archivo, os.path.getmtime(ruta))
+        barra = st.progress(0.0)
 
-        if resultado:
-            mostrar_analisis(resultado, archivo)
+        tabla = evaluar(
+            paquetes,
+            opciones={"segmentacion": segmentacion},
+            progreso=lambda i, n, t: barra.progress(i / n, text=t)
+        )
 
-        st.divider()
-        ruta_json = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.json")
-        ruta_csv = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.csv")
+        os.makedirs(os.path.dirname(ruta_detalle), exist_ok=True)
+        tabla.to_csv(ruta_detalle, index=False, encoding="utf-8-sig")
+        barra.empty()
 
-        st.markdown("**Salida acumulada de todas las alertas**")
-        st.code(f"{os.path.relpath(ruta_json)}\n{os.path.relpath(ruta_csv)}", language=None)
+    if not os.path.exists(ruta_detalle):
+        st.info("Aun no hay resultados. Pulsa el boton para ejecutar la evaluacion.")
+        return
+
+    tabla = pd.read_csv(ruta_detalle)
+    resumen = resumen_por_escenario(tabla)
+
+    st.caption(f"Ultima evaluacion: {tabla['origen'].nunique()} imagenes.")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("**Confianza media de VIDEO en personas**")
+        st.bar_chart(
+            resumen[["antes_conf_personas", "despues_conf_personas"]]
+            .rename(columns={"antes_conf_personas": "antes", "despues_conf_personas": "despues"}),
+            stack=False, color=["#64748B", "#2DD4BF"]
+        )
+
+    with c2:
+        st.markdown("**SSIM respecto a la imagen original**")
+        st.bar_chart(
+            resumen[["ssim_antes", "ssim_despues"]].dropna()
+            .rename(columns={"ssim_antes": "antes", "ssim_despues": "despues"}),
+            stack=False, color=["#64748B", "#2DD4BF"]
+        )
+
+    st.markdown("**Resumen por escenario**")
+    st.dataframe(resumen.T)
+
+    with st.expander("Detalle por imagen"):
+        st.dataframe(tabla, hide_index=True)
+
+
+def aviso_simulacion():
+
+    if simulacion_activa:
+        partes = []
+        if oscuridad:
+            partes.append(f"poca luz {oscuridad:.2f}")
+        if ruido_simulado:
+            partes.append(f"ruido {ruido_simulado}")
+        if desenfoque:
+            partes.append(f"desenfoque {desenfoque}")
+        st.warning("Simulacion activa sobre la captura: " + ", ".join(partes))
+
+
+vista = st.segmented_control(
+    "Vista", ["Analisis", "Evaluacion comparativa"],
+    default="Analisis", label_visibility="collapsed"
+) or "Analisis"
 
 
 # ============================================================
-# MODO 2: IMAGENES DE PRUEBA (experimentos y respaldo)
+# MODO 1: ALERTAS DE VIDEO
+# ============================================================
+
+if fuente == "Alertas de VIDEO":
+
+    if vista == "Evaluacion comparativa":
+
+        paquetes = []
+
+        for nombre in vigilante.alertas_en_carpeta():
+            ruta = os.path.join(CARPETA_ALERTAS_VIDEO, nombre)
+            paquete = cargar_alerta(nombre, os.path.getmtime(ruta))
+            if paquete:
+                paquetes.append(paquete)
+
+        seccion_evaluacion(
+            paquetes,
+            os.path.join(CARPETA_EN_VIVO, "evaluacion_alertas_detalle.csv"),
+            "Sobre las capturas reales de la alarma de VIDEO."
+        )
+
+    else:
+
+        panel_alertas()
+
+        archivo = st.session_state.get("archivo_actual")
+        ruta = os.path.join(CARPETA_ALERTAS_VIDEO, archivo) if archivo else None
+
+        if ruta and os.path.exists(ruta):
+
+            st.divider()
+            st.markdown(f"### Analisis de IMAGEN · `{archivo}`")
+            aviso_simulacion()
+
+            paquete = cargar_alerta(archivo, os.path.getmtime(ruta))
+
+            if paquete:
+                mostrar_analisis(procesar(paquete, opciones_clave), archivo)
+
+            # ------------------------------------------------
+            # Resumen de todas las alertas (salida para otros grupos)
+            # ------------------------------------------------
+
+            st.divider()
+            st.markdown("### Resumen de todas las alertas")
+            st.caption(
+                "Salida acumulada de IMAGEN: un registro por alerta procesada. "
+                "Es lo que otros modulos (por ejemplo, PREDICCION) pueden leer."
+            )
+
+            todas = list(reversed(vigilante.procesadas()))
+
+            st.dataframe(pd.DataFrame([
+                {
+                    "#": n + 1,
+                    "archivo": r["archivo"],
+                    "alarma": (r.get("alerta_video") or {}).get("objeto"),
+                    "fecha": (r.get("alerta_video") or {}).get("fecha"),
+                    "objetos": len(r["objetos"]),
+                    "confianza antes": r["resumen"]["comparacion_video"]["confianza_media_antes"],
+                    "confianza despues": r["resumen"]["comparacion_video"]["confianza_media_despues"],
+                    "brillo antes": r["calidad"]["capturado"]["brillo"],
+                    "brillo despues": r["calidad"]["mejorado"]["brillo"],
+                    "ruido antes": r["calidad"]["capturado"]["ruido"],
+                    "ruido despues": r["calidad"]["mejorado"]["ruido"]
+                }
+                for n, r in enumerate(todas)
+            ]), hide_index=True)
+
+            ruta_json = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.json")
+            ruta_csv = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.csv")
+
+            c1, c2, _ = st.columns([1, 1, 3])
+
+            if os.path.exists(ruta_json):
+                with open(ruta_json, "rb") as f:
+                    c1.download_button("Descargar JSON (todas)", f.read(),
+                                       file_name="resultados_alertas.json",
+                                       mime="application/json")
+
+            if os.path.exists(ruta_csv):
+                with open(ruta_csv, "rb") as f:
+                    c2.download_button("Descargar CSV (todas)", f.read(),
+                                       file_name="resultados_alertas.csv",
+                                       mime="text/csv")
+
+
+# ============================================================
+# MODO 2: IMAGENES DE PRUEBA
 # ============================================================
 
 else:
 
     paquetes = cargar_imagenes_prueba()
 
-    with st.sidebar:
-
-        st.divider()
-        st.markdown("**Imagen**")
-
-        nombres = [p["origen"] for p in paquetes]
-        nombre = st.selectbox("Imagen", nombres, label_visibility="collapsed")
-
-        st.markdown("**Condiciones de captura (simulacion)**")
-        oscuridad = st.slider("Poca luz", 0.0, 0.9, 0.0, 0.05)
-        ruido_simulado = st.slider("Ruido de sensor", 0, 60, 0, 5)
-        desenfoque = st.slider("Desenfoque", 0, 21, 0, 2)
-
-        st.markdown("**Procesamiento**")
-        modo = st.radio("Modo", ["adaptativo", "manual"], horizontal=True)
-
-        opciones = {
-            "modo": modo,
-            "oscuridad": oscuridad,
-            "ruido_simulado": ruido_simulado,
-            "desenfoque": desenfoque
-        }
-
-        if modo == "manual":
-
-            opciones["ruido"] = st.selectbox(
-                "Filtro de ruido", ["ninguno", "mediana", "gaussiano", "bilateral", "nlmeans"], index=1
-            )
-            opciones["fuerza_ruido"] = st.slider("Fuerza del filtro", 1, 25, 3)
-            opciones["iluminacion"] = st.selectbox(
-                "Iluminacion", ["ninguno", "clahe", "ecualizacion", "gamma_auto", "gamma_auto+clahe"], index=1
-            )
-            opciones["limite_clahe"] = st.slider("Limite CLAHE", 0.5, 5.0, 1.5, 0.5)
-            opciones["contraste"] = st.selectbox("Contraste", ["ninguno", "estiramiento", "manual"], index=1)
-
-            if opciones["contraste"] == "manual":
-                opciones["alfa"] = st.slider("Contraste (alfa)", 0.5, 3.0, 1.0, 0.1)
-                opciones["beta"] = st.slider("Brillo (beta)", -100, 100, 0, 5)
-
-            opciones["nitidez"] = st.slider("Nitidez (unsharp)", 0.0, 2.0, 0.5, 0.1)
-
-        opciones["segmentacion"] = st.selectbox("Segmentacion", ["grabcut", "otsu"])
-
-    vista = st.segmented_control(
-        "Vista", ["Analisis de la imagen", "Evaluacion comparativa"],
-        default="Analisis de la imagen", label_visibility="collapsed"
-    )
-
     if vista == "Evaluacion comparativa":
 
-        st.markdown("### Evaluacion comparativa")
-        st.caption(
-            "Cada imagen de prueba se degrada en varios escenarios y se compara la salida "
-            "del modelo de VIDEO antes y despues del procesamiento adaptativo de IMAGEN."
+        seccion_evaluacion(
+            paquetes,
+            os.path.join(CARPETA_RESULTADOS, "evaluacion_detalle.csv"),
+            "Sobre las imagenes de prueba."
         )
-
-        ruta_detalle = os.path.join(CARPETA_RESULTADOS, "evaluacion_detalle.csv")
-
-        if st.button("Ejecutar evaluacion", type="primary"):
-
-            barra = st.progress(0.0)
-
-            tabla = evaluar(
-                paquetes,
-                progreso=lambda i, n, t: barra.progress(i / n, text=t)
-            )
-
-            os.makedirs(CARPETA_RESULTADOS, exist_ok=True)
-            tabla.to_csv(ruta_detalle, index=False, encoding="utf-8-sig")
-            barra.empty()
-
-        if os.path.exists(ruta_detalle):
-
-            tabla = pd.read_csv(ruta_detalle)
-            resumen = resumen_por_escenario(tabla)
-
-            c1, c2 = st.columns(2)
-
-            with c1:
-                st.markdown("**Confianza media de VIDEO en personas**")
-                st.bar_chart(
-                    resumen[["antes_conf_personas", "despues_conf_personas"]]
-                    .rename(columns={"antes_conf_personas": "antes", "despues_conf_personas": "despues"}),
-                    stack=False, color=["#64748B", "#2DD4BF"]
-                )
-
-            with c2:
-                st.markdown("**SSIM respecto a la imagen original**")
-                st.bar_chart(
-                    resumen[["ssim_antes", "ssim_despues"]].dropna()
-                    .rename(columns={"ssim_antes": "antes", "ssim_despues": "despues"}),
-                    stack=False, color=["#64748B", "#2DD4BF"]
-                )
-
-            st.markdown("**Resumen por escenario**")
-            st.dataframe(resumen.T)
-
-            with st.expander("Detalle por imagen"):
-                st.dataframe(tabla, hide_index=True)
-
-        else:
-            st.info("Aun no hay resultados. Pulsa 'Ejecutar evaluacion' (tarda unos minutos).")
 
     else:
 
-        paquete = next(p for p in paquetes if p["origen"] == nombre)
-        opciones_clave = tuple(sorted({**OPCIONES_POR_DEFECTO, **opciones}.items()))
+        paquete = next(p for p in paquetes if p["origen"] == nombre_prueba)
 
-        resultado = procesar(paquete, opciones_clave)
+        st.markdown(f"### Analisis de IMAGEN · `{nombre_prueba}`")
+        aviso_simulacion()
 
-        st.markdown(f"### Analisis de IMAGEN · `{nombre}`")
-        mostrar_analisis(resultado, nombre)
+        mostrar_analisis(procesar(paquete, opciones_clave), nombre_prueba)
