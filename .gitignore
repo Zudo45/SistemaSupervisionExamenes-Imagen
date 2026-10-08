@@ -18,3 +18,8 @@ capturas/
 
 # Configuración local
 .vscode/
+# Modulo IMAGEN
+.venv/
+resultados/
+calibracion/*.csv
+.streamlit/secrets.toml

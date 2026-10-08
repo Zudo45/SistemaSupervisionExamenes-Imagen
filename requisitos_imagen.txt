@@ -1,0 +1,4 @@
+-r requisitos.txt
+streamlit
+pandas
+scikit-image

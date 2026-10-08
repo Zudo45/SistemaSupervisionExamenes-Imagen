@@ -1,0 +1,798 @@
+# ============================================================
+# MODULO IMAGEN - APLICACION WEB
+# Uso:
+#   python -m streamlit run app_imagen.py
+# ============================================================
+
+import os
+import hmac
+import json
+import socket
+
+import pandas as pd
+import streamlit as st
+
+from modulo_imagen.config_imagen import (
+    CARPETA_IMAGENES_PRUEBA,
+    CARPETA_RESULTADOS,
+    CARPETA_ALERTAS_VIDEO,
+    CARPETA_EN_VIVO,
+    INTERVALO_REVISION_SEG,
+    LADO_MINIMO_REGION
+)
+from modulo_imagen.recepcion import frames_desde_carpeta
+from modulo_imagen.pipeline import procesar_frame, OPCIONES_POR_DEFECTO
+from modulo_imagen.exportacion import generar_json, filas_csv
+from modulo_imagen.evaluacion import evaluar, resumen_por_escenario
+from modulo_imagen.segmentacion import aislar_objeto
+from modulo_imagen.mejoramiento import ampliar
+from modulo_imagen import vigilante
+from modulo_imagen.visualizacion import (
+    dibujar_video,
+    dibujar_verificadas,
+    superponer_mascara,
+    histograma_gris,
+    a_rgb
+)
+
+
+st.set_page_config(
+    page_title="Modulo IMAGEN",
+    page_icon="🖼️",
+    layout="wide"
+)
+
+
+# ============================================================
+# ESTILOS
+# ============================================================
+
+st.markdown("""
+<style>
+.block-container {padding-top: 2rem; max-width: 1400px;}
+.encabezado {
+    padding: 1.4rem 1.6rem; border-radius: 16px; margin-bottom: 1.2rem;
+    background: linear-gradient(120deg, #0F766E 0%, #134E4A 45%, #131C2E 100%);
+    border: 1px solid #1F2A40;
+}
+.encabezado h1 {margin: 0; font-size: 2rem; color: #F8FAFC;}
+.encabezado p {margin: .3rem 0 0; color: #CCFBF1; font-size: .95rem;}
+.flujo {display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .8rem;}
+.flujo span {
+    background: rgba(15, 23, 42, .55); color: #E2E8F0; border-radius: 999px;
+    padding: .2rem .7rem; font-size: .78rem; border: 1px solid rgba(45, 212, 191, .35);
+}
+.pastilla {
+    display: inline-block; border-radius: 999px; padding: .15rem .65rem;
+    font-size: .8rem; font-weight: 600; margin-right: .3rem;
+}
+.p-alerta {background: #7F1D1D; color: #FECACA;}
+.p-ok {background: #134E4A; color: #99F6E4;}
+.p-info {background: #1E293B; color: #CBD5E1; border: 1px solid #334155;}
+.vivo {display: inline-flex; align-items: center; gap: .45rem; color: #99F6E4; font-size: .85rem;}
+.vivo::before {
+    content: ""; width: 9px; height: 9px; border-radius: 50%; background: #2DD4BF;
+    box-shadow: 0 0 0 0 rgba(45, 212, 191, .7); animation: pulso 1.8s infinite;
+}
+@keyframes pulso {
+    0% {box-shadow: 0 0 0 0 rgba(45, 212, 191, .6);}
+    70% {box-shadow: 0 0 0 9px rgba(45, 212, 191, 0);}
+    100% {box-shadow: 0 0 0 0 rgba(45, 212, 191, 0);}
+}
+.contador {text-align: center; font-size: 1.05rem; padding-top: .35rem; color: #E2E8F0;}
+.contador b {color: #2DD4BF;}
+div[data-testid="stMetric"] {
+    background: #131C2E; border: 1px solid #1F2A40; border-radius: 12px; padding: .7rem 1rem;
+}
+.vacio {
+    text-align: center; padding: 3rem 1rem; border: 1px dashed #334155;
+    border-radius: 16px; color: #94A3B8;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# ACCESO
+# ============================================================
+
+def verificar_acceso():
+
+    if st.session_state.get("autenticado"):
+        return
+
+    try:
+        credenciales = st.secrets["acceso"]
+    except (KeyError, FileNotFoundError):
+        # Sin credenciales configuradas, la pagina queda abierta
+        st.session_state["autenticado"] = True
+        return
+
+    _, centro, _ = st.columns([1, 1.2, 1])
+
+    with centro:
+
+        st.markdown("<div style='height:12vh'></div>", unsafe_allow_html=True)
+        st.markdown("## 🖼️ Modulo IMAGEN")
+        st.caption("Sistema de Supervision de Examenes")
+
+        with st.form("acceso"):
+
+            usuario = st.text_input("Usuario")
+            clave = st.text_input("Contrasena", type="password")
+
+            if st.form_submit_button("Ingresar", width="stretch"):
+
+                if (hmac.compare_digest(usuario, credenciales["usuario"])
+                        and hmac.compare_digest(clave, credenciales["clave"])):
+                    st.session_state["autenticado"] = True
+                    st.rerun()
+
+                st.error("Usuario o contrasena incorrectos")
+
+    st.stop()
+
+
+verificar_acceso()
+
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+def ip_local():
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return "localhost"
+
+
+def mostrar(imagen, titulo=None):
+
+    st.image(a_rgb(imagen), caption=titulo, width="stretch")
+
+
+def pastilla(texto, tipo="info"):
+
+    return f"<span class='pastilla p-{tipo}'>{texto}</span>"
+
+
+@st.cache_data(show_spinner=False)
+def cargar_imagenes_prueba():
+
+    return list(frames_desde_carpeta(CARPETA_IMAGENES_PRUEBA))
+
+
+@st.cache_data(show_spinner="Analizando imagen...")
+def procesar(paquete, opciones):
+
+    return procesar_frame(paquete, dict(opciones))
+
+
+@st.cache_data(show_spinner="Analizando alerta...")
+def procesar_alerta_detalle(nombre_archivo, modificado):
+    """
+    Resultado completo (con imagenes intermedias) de una alerta.
+    `modificado` invalida la cache si el archivo cambia.
+    """
+
+    paquete = vigilante.cargar_paquete(nombre_archivo)
+
+    if paquete is None:
+        return None
+
+    return procesar_frame(paquete)
+
+
+def tabla_calidad(calidad):
+
+    filas = []
+
+    for metrica in ("brillo", "contraste", "nitidez", "ruido", "entropia"):
+        filas.append({
+            "metrica": metrica,
+            "antes": calidad["capturado"][metrica],
+            "despues": calidad["mejorado"][metrica]
+        })
+
+    if "vs_original" in calidad:
+        for metrica in ("psnr", "ssim"):
+            filas.append({
+                "metrica": f"{metrica} (vs. original)",
+                "antes": calidad["vs_original"]["capturado"][metrica],
+                "despues": calidad["vs_original"]["mejorado"][metrica]
+            })
+
+    return pd.DataFrame(filas).set_index("metrica")
+
+
+# ============================================================
+# ANALISIS DE UN FOTOGRAMA (pestanas)
+# ============================================================
+
+def mostrar_analisis(resultado, clave):
+
+    imagenes = resultado["imagenes"]
+    registro = resultado["registro_video"]
+    objetos = resultado["objetos"]
+
+    pestanas = st.tabs([
+        "📥 Recepcion",
+        "🧹 Preprocesamiento",
+        "✨ Mejoramiento",
+        "✂️ Segmentacion",
+        "📐 Caracteristicas",
+        "✅ Verificacion",
+        "📤 Exportacion"
+    ])
+
+    # --------------------------------------------------------
+    # RECEPCION
+    # --------------------------------------------------------
+
+    with pestanas[0]:
+
+        st.caption(
+            "Fotograma y detecciones entregados por VIDEO (su modelo best.pt, sin cambios)."
+        )
+
+        c1, c2 = st.columns([3, 2])
+
+        with c1:
+            mostrar(dibujar_video(imagenes["capturado"], registro["detecciones"]),
+                    f"{registro['origen']} · {registro['ancho']}x{registro['alto']}")
+
+        with c2:
+
+            alerta = registro.get("alerta")
+
+            if alerta:
+                st.markdown(
+                    pastilla(f"Alarma: {alerta['objeto']}", "alerta")
+                    + pastilla(alerta["fecha"] or "sin fecha"),
+                    unsafe_allow_html=True
+                )
+                if not alerta.get("objeto_redetectado"):
+                    st.caption(
+                        "El modelo de VIDEO no vuelve a encontrar el objeto de la alarma "
+                        "en esta captura (su deteccion parpadea entre fotogramas). "
+                        "La imagen se procesa igual."
+                    )
+
+            if registro["detecciones"]:
+                st.dataframe(pd.DataFrame(registro["detecciones"]), hide_index=True)
+            else:
+                st.info("VIDEO no reporto detecciones en este fotograma.")
+
+            with st.expander("Registro recibido (JSON)"):
+                st.json(registro)
+
+    # --------------------------------------------------------
+    # PREPROCESAMIENTO
+    # --------------------------------------------------------
+
+    with pestanas[1]:
+
+        if resultado["decisiones"]:
+            st.markdown("**Decisiones del preprocesamiento adaptativo**")
+            for decision in resultado["decisiones"]:
+                st.markdown(f"- {decision}")
+
+        op = resultado["opciones"]
+        st.caption(
+            f"Filtro de ruido: {op['ruido']} ({op['fuerza_ruido']}) · "
+            f"Iluminacion: {op['iluminacion']} (CLAHE {op['limite_clahe']})"
+        )
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            mostrar(imagenes["capturado"], "Capturado")
+        with c2:
+            mostrar(imagenes["preprocesado"], "Preprocesado")
+
+        st.markdown("**Histograma de intensidades**")
+        st.line_chart(pd.DataFrame({
+            "capturado": histograma_gris(imagenes["capturado"]),
+            "preprocesado": histograma_gris(imagenes["preprocesado"])
+        }), color=["#64748B", "#2DD4BF"])
+
+    # --------------------------------------------------------
+    # MEJORAMIENTO
+    # --------------------------------------------------------
+
+    with pestanas[2]:
+
+        op = resultado["opciones"]
+        st.caption(f"Contraste: {op['contraste']} · Nitidez (unsharp masking): {op['nitidez']}")
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            mostrar(imagenes["capturado"], "Antes")
+        with c2:
+            mostrar(imagenes["mejorado"], "Despues")
+
+        calidad = resultado["calidad"]
+
+        columnas = st.columns(4)
+
+        for columna, metrica in zip(columnas, ("brillo", "contraste", "nitidez", "ruido")):
+
+            antes = calidad["capturado"][metrica]
+            despues = calidad["mejorado"][metrica]
+
+            columna.metric(
+                metrica.capitalize(),
+                f"{despues:.1f}",
+                f"{despues - antes:+.1f}",
+                delta_color="inverse" if metrica == "ruido" else "normal"
+            )
+
+        st.dataframe(tabla_calidad(calidad))
+
+    # --------------------------------------------------------
+    # SEGMENTACION
+    # --------------------------------------------------------
+
+    with pestanas[3]:
+
+        if not objetos:
+            st.info("No hay objetos detectados por VIDEO para segmentar.")
+        else:
+            etiquetas = [
+                f"{o['id']}: {o['deteccion']['clase']} ({o['deteccion']['confianza_video']:.2f})"
+                for o in objetos
+            ]
+
+            # Por defecto, el primer objeto no permitido
+            inicial = next(
+                (i for i, o in enumerate(objetos) if o["deteccion"]["clase"] != "persona"), 0
+            )
+
+            elegido = objetos[etiquetas.index(
+                st.selectbox("Objeto", etiquetas, index=inicial, key=f"seg_{clave}")
+            )]
+            segmento = elegido["segmento"]
+
+            recorte = segmento["recorte"]
+            ampliado, _ = ampliar(recorte, LADO_MINIMO_REGION)
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            with c1:
+                mostrar(ampliado, "Region (ampliada, bicubica)")
+            with c2:
+                st.image(segmento["mascara"], caption="Mascara (GrabCut)", width="stretch")
+            with c3:
+                mostrar(superponer_mascara(recorte, segmento["mascara"], segmento["contorno"]),
+                        "Contorno")
+            with c4:
+                mostrar(aislar_objeto(recorte, segmento["mascara"]), "Objeto aislado")
+
+            st.image(segmento["bordes"], caption="Bordes (Canny)", width=360)
+
+    # --------------------------------------------------------
+    # CARACTERISTICAS
+    # --------------------------------------------------------
+
+    with pestanas[4]:
+
+        if objetos:
+            st.dataframe(pd.DataFrame([
+                {"id": o["id"], "clase": o["deteccion"]["clase"], **o["caracteristicas"]}
+                for o in objetos
+            ]).set_index("id"))
+
+            st.caption(
+                "Tamano y posicion (area, centro, zona 3x3), forma (circularidad, solidez, "
+                "relleno), color dominante (HSV), textura (nitidez, densidad de bordes) "
+                "y relacion con la persona."
+            )
+        else:
+            st.info("No hay objetos detectados.")
+
+    # --------------------------------------------------------
+    # VERIFICACION
+    # --------------------------------------------------------
+
+    with pestanas[5]:
+
+        st.caption(
+            "El mismo modelo de VIDEO se ejecuta sobre el fotograma antes y despues "
+            "del procesamiento de IMAGEN, y se comparan los resultados."
+        )
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            mostrar(dibujar_video(imagenes["capturado"], registro["detecciones"]),
+                    "VIDEO sobre el fotograma capturado")
+        with c2:
+            mostrar(dibujar_verificadas(imagenes["mejorado"], [o["deteccion"] for o in objetos]),
+                    "VIDEO sobre el fotograma procesado")
+
+        comparacion = resultado["resumen"]["comparacion_video"]
+
+        m1, m2, m3, m4 = st.columns(4)
+
+        m1.metric("Detecciones", comparacion["detecciones_despues"],
+                  comparacion["detecciones_despues"] - comparacion["detecciones_antes"])
+        m2.metric("Confianza media", f"{comparacion['confianza_media_despues']:.2f}",
+                  f"{comparacion['confianza_media_despues'] - comparacion['confianza_media_antes']:+.2f}")
+        m3.metric("Mantenidas", comparacion["mantenidas"])
+        m4.metric("Perdidas", comparacion["perdidas"], delta_color="off")
+
+        if objetos:
+            st.dataframe(pd.DataFrame([
+                {
+                    "id": o["id"],
+                    "clase": o["deteccion"]["clase"],
+                    "confianza antes": o["deteccion"]["confianza_video"],
+                    "confianza despues": o["deteccion"]["confianza_procesada"],
+                    "variacion": o["deteccion"]["variacion_confianza"],
+                    "estado": o["deteccion"]["estado"]
+                }
+                for o in objetos
+            ]).set_index("id"))
+
+    # --------------------------------------------------------
+    # EXPORTACION
+    # --------------------------------------------------------
+
+    with pestanas[6]:
+
+        datos = generar_json([resultado])
+        filas = filas_csv([resultado])
+
+        st.caption("Salida de IMAGEN para otros modulos del sistema (por ejemplo, PREDICCION).")
+
+        c1, c2, _ = st.columns([1, 1, 3])
+
+        c1.download_button(
+            "Descargar JSON",
+            json.dumps(datos, indent=2, ensure_ascii=False),
+            file_name="resultado_imagen.json",
+            mime="application/json",
+            key=f"json_{clave}"
+        )
+
+        if filas:
+            c2.download_button(
+                "Descargar CSV",
+                pd.DataFrame(filas).to_csv(index=False).encode("utf-8-sig"),
+                file_name="resultado_imagen.csv",
+                mime="text/csv",
+                key=f"csv_{clave}"
+            )
+
+        st.json(datos, expanded=False)
+
+
+# ============================================================
+# BARRA LATERAL
+# ============================================================
+
+with st.sidebar:
+
+    st.markdown("### 🖼️ Modulo IMAGEN")
+    st.caption("Sistema de Supervision de Examenes")
+
+    fuente = st.radio(
+        "Fuente",
+        ["Alertas de VIDEO", "Imagenes de prueba"],
+        captions=["Capturas de la alarma de VIDEO", "Experimentos y respaldo"]
+    )
+
+    st.divider()
+    st.markdown("**Acceso desde otra PC (misma red)**")
+    st.code(f"http://{ip_local()}:8501", language=None)
+
+    if st.session_state.get("autenticado") and st.button("Cerrar sesion", width="stretch"):
+        st.session_state.clear()
+        st.rerun()
+
+
+# ============================================================
+# ENCABEZADO
+# ============================================================
+
+st.markdown("""
+<div class="encabezado">
+  <h1>Modulo IMAGEN</h1>
+  <p>VIDEO detecta. IMAGEN mejora, analiza y caracteriza lo detectado,
+     y mide si su procesamiento mejora los resultados de VIDEO.</p>
+  <div class="flujo">
+    <span>1 · Recepcion</span><span>2 · Preprocesamiento adaptativo</span>
+    <span>3 · Mejoramiento</span><span>4 · Segmentacion</span>
+    <span>5 · Caracteristicas</span><span>6 · Verificacion</span>
+    <span>7 · Exportacion</span>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# MODO 1: ALERTAS DE VIDEO
+# ============================================================
+
+def ir_a(indice):
+
+    st.session_state["alerta_actual"] = indice
+    st.session_state["seguir_ultima"] = False
+
+
+@st.fragment(run_every=INTERVALO_REVISION_SEG)
+def panel_alertas():
+
+    # Procesa como maximo una alerta nueva por ciclo para no bloquear
+    pendientes = vigilante.pendientes()
+
+    if pendientes:
+        with st.spinner(f"Procesando alerta nueva: {pendientes[0]}"):
+            vigilante.revisar(maximo=1)
+
+    lista = list(reversed(vigilante.procesadas()))   # mas antigua primero
+    total = len(lista)
+
+    ultima = lista[-1]["archivo"] if lista else None
+
+    # Si llega una alerta nueva y se esta siguiendo la ultima, saltar a ella
+    if ultima != st.session_state.get("ultima_vista"):
+        st.session_state["ultima_vista"] = ultima
+        if st.session_state.get("seguir_ultima", True) and total:
+            st.session_state["alerta_actual"] = total - 1
+            st.rerun()
+
+    # Estado
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.markdown("<div class='vivo'>Vigilando carpeta de alertas de VIDEO</div>",
+                unsafe_allow_html=True)
+    c1.caption(os.path.relpath(CARPETA_ALERTAS_VIDEO))
+    c2.metric("Alertas procesadas", total)
+    c3.metric("En cola", len(vigilante.pendientes()))
+
+    if total:
+        variaciones = [
+            r["resumen"]["comparacion_video"]["confianza_media_despues"]
+            - r["resumen"]["comparacion_video"]["confianza_media_antes"]
+            for r in lista
+        ]
+        c4.metric("Variacion media de confianza", f"{sum(variaciones) / total:+.2f}")
+
+    if not total:
+        st.markdown(
+            "<div class='vacio'>Esperando capturas de la alarma de VIDEO…<br>"
+            "<small>Cada captura que VIDEO guarde en su carpeta de alertas se procesara "
+            "automaticamente.</small></div>",
+            unsafe_allow_html=True
+        )
+        return
+
+    indice = min(st.session_state.get("alerta_actual", total - 1), total - 1)
+    actual = lista[indice]
+
+    # Navegacion
+    st.write("")
+    n1, n2, n3 = st.columns([1, 3, 1])
+
+    n1.button("◀ Anterior", width="stretch", disabled=indice == 0,
+              on_click=ir_a, args=(indice - 1,))
+    n2.markdown(
+        f"<div class='contador'>Alerta <b>{indice + 1}</b> de <b>{total}</b> · "
+        f"{actual['alerta_video']['objeto']} · {actual['alerta_video']['fecha'] or ''}</div>",
+        unsafe_allow_html=True
+    )
+    n3.button("Siguiente ▶", width="stretch", disabled=indice == total - 1,
+              on_click=ir_a, args=(indice + 1,))
+
+    # Antes / despues
+    comparacion = actual["resumen"]["comparacion_video"]
+
+    i1, i2 = st.columns(2)
+
+    with i1:
+        st.image(actual["imagenes"]["original"], width="stretch",
+                 caption="Captura de VIDEO con sus detecciones")
+    with i2:
+        st.image(actual["imagenes"]["procesada"], width="stretch",
+                 caption="Procesada por IMAGEN · detecciones de VIDEO verificadas")
+
+    st.markdown(
+        pastilla(f"Alarma: {actual['alerta_video']['objeto']}", "alerta")
+        + pastilla(
+            f"Confianza {comparacion['confianza_media_antes']:.2f} → "
+            f"{comparacion['confianza_media_despues']:.2f}",
+            "ok" if comparacion["confianza_media_despues"] >= comparacion["confianza_media_antes"] else "info"
+        )
+        + pastilla(f"{len(actual['objetos'])} objetos analizados")
+        + pastilla(f"Procesada en {actual['segundos_proceso']} s"),
+        unsafe_allow_html=True
+    )
+
+    # Miniaturas
+    st.write("")
+    st.caption("Todas las alertas")
+
+    por_fila = 8
+
+    for inicio in range(0, total, por_fila):
+
+        columnas = st.columns(por_fila)
+
+        for desplazamiento, columna in enumerate(columnas):
+
+            j = inicio + desplazamiento
+
+            if j >= total:
+                break
+
+            with columna:
+                st.image(lista[j]["imagenes"]["procesada"], width="stretch")
+                st.button(
+                    ("● " if j == indice else "") + f"{j + 1}",
+                    key=f"mini_{j}",
+                    width="stretch",
+                    type="primary" if j == indice else "secondary",
+                    on_click=ir_a,
+                    args=(j,)
+                )
+
+    # El analisis detallado esta fuera del fragmento: si cambia la
+    # alerta seleccionada, se recarga toda la pagina
+    if st.session_state.get("archivo_actual") != actual["archivo"]:
+        st.session_state["archivo_actual"] = actual["archivo"]
+        st.rerun()
+
+
+if fuente == "Alertas de VIDEO":
+
+    panel_alertas()
+
+    archivo = st.session_state.get("archivo_actual")
+    ruta = os.path.join(CARPETA_ALERTAS_VIDEO, archivo) if archivo else None
+
+    if ruta and os.path.exists(ruta):
+
+        st.divider()
+        st.markdown(f"### Analisis de IMAGEN · `{archivo}`")
+
+        resultado = procesar_alerta_detalle(archivo, os.path.getmtime(ruta))
+
+        if resultado:
+            mostrar_analisis(resultado, archivo)
+
+        st.divider()
+        ruta_json = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.json")
+        ruta_csv = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.csv")
+
+        st.markdown("**Salida acumulada de todas las alertas**")
+        st.code(f"{os.path.relpath(ruta_json)}\n{os.path.relpath(ruta_csv)}", language=None)
+
+
+# ============================================================
+# MODO 2: IMAGENES DE PRUEBA (experimentos y respaldo)
+# ============================================================
+
+else:
+
+    paquetes = cargar_imagenes_prueba()
+
+    with st.sidebar:
+
+        st.divider()
+        st.markdown("**Imagen**")
+
+        nombres = [p["origen"] for p in paquetes]
+        nombre = st.selectbox("Imagen", nombres, label_visibility="collapsed")
+
+        st.markdown("**Condiciones de captura (simulacion)**")
+        oscuridad = st.slider("Poca luz", 0.0, 0.9, 0.0, 0.05)
+        ruido_simulado = st.slider("Ruido de sensor", 0, 60, 0, 5)
+        desenfoque = st.slider("Desenfoque", 0, 21, 0, 2)
+
+        st.markdown("**Procesamiento**")
+        modo = st.radio("Modo", ["adaptativo", "manual"], horizontal=True)
+
+        opciones = {
+            "modo": modo,
+            "oscuridad": oscuridad,
+            "ruido_simulado": ruido_simulado,
+            "desenfoque": desenfoque
+        }
+
+        if modo == "manual":
+
+            opciones["ruido"] = st.selectbox(
+                "Filtro de ruido", ["ninguno", "mediana", "gaussiano", "bilateral", "nlmeans"], index=1
+            )
+            opciones["fuerza_ruido"] = st.slider("Fuerza del filtro", 1, 25, 3)
+            opciones["iluminacion"] = st.selectbox(
+                "Iluminacion", ["ninguno", "clahe", "ecualizacion", "gamma_auto", "gamma_auto+clahe"], index=1
+            )
+            opciones["limite_clahe"] = st.slider("Limite CLAHE", 0.5, 5.0, 1.5, 0.5)
+            opciones["contraste"] = st.selectbox("Contraste", ["ninguno", "estiramiento", "manual"], index=1)
+
+            if opciones["contraste"] == "manual":
+                opciones["alfa"] = st.slider("Contraste (alfa)", 0.5, 3.0, 1.0, 0.1)
+                opciones["beta"] = st.slider("Brillo (beta)", -100, 100, 0, 5)
+
+            opciones["nitidez"] = st.slider("Nitidez (unsharp)", 0.0, 2.0, 0.5, 0.1)
+
+        opciones["segmentacion"] = st.selectbox("Segmentacion", ["grabcut", "otsu"])
+
+    vista = st.segmented_control(
+        "Vista", ["Analisis de la imagen", "Evaluacion comparativa"],
+        default="Analisis de la imagen", label_visibility="collapsed"
+    )
+
+    if vista == "Evaluacion comparativa":
+
+        st.markdown("### Evaluacion comparativa")
+        st.caption(
+            "Cada imagen de prueba se degrada en varios escenarios y se compara la salida "
+            "del modelo de VIDEO antes y despues del procesamiento adaptativo de IMAGEN."
+        )
+
+        ruta_detalle = os.path.join(CARPETA_RESULTADOS, "evaluacion_detalle.csv")
+
+        if st.button("Ejecutar evaluacion", type="primary"):
+
+            barra = st.progress(0.0)
+
+            tabla = evaluar(
+                paquetes,
+                progreso=lambda i, n, t: barra.progress(i / n, text=t)
+            )
+
+            os.makedirs(CARPETA_RESULTADOS, exist_ok=True)
+            tabla.to_csv(ruta_detalle, index=False, encoding="utf-8-sig")
+            barra.empty()
+
+        if os.path.exists(ruta_detalle):
+
+            tabla = pd.read_csv(ruta_detalle)
+            resumen = resumen_por_escenario(tabla)
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+                st.markdown("**Confianza media de VIDEO en personas**")
+                st.bar_chart(
+                    resumen[["antes_conf_personas", "despues_conf_personas"]]
+                    .rename(columns={"antes_conf_personas": "antes", "despues_conf_personas": "despues"}),
+                    stack=False, color=["#64748B", "#2DD4BF"]
+                )
+
+            with c2:
+                st.markdown("**SSIM respecto a la imagen original**")
+                st.bar_chart(
+                    resumen[["ssim_antes", "ssim_despues"]].dropna()
+                    .rename(columns={"ssim_antes": "antes", "ssim_despues": "despues"}),
+                    stack=False, color=["#64748B", "#2DD4BF"]
+                )
+
+            st.markdown("**Resumen por escenario**")
+            st.dataframe(resumen.T)
+
+            with st.expander("Detalle por imagen"):
+                st.dataframe(tabla, hide_index=True)
+
+        else:
+            st.info("Aun no hay resultados. Pulsa 'Ejecutar evaluacion' (tarda unos minutos).")
+
+    else:
+
+        paquete = next(p for p in paquetes if p["origen"] == nombre)
+        opciones_clave = tuple(sorted({**OPCIONES_POR_DEFECTO, **opciones}.items()))
+
+        resultado = procesar(paquete, opciones_clave)
+
+        st.markdown(f"### Analisis de IMAGEN · `{nombre}`")
+        mostrar_analisis(resultado, nombre)
