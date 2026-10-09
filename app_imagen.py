@@ -12,14 +12,11 @@ import pandas as pd
 import streamlit as st
 
 from modulo_imagen.config_imagen import (
-    CARPETA_IMAGENES_PRUEBA,
-    CARPETA_RESULTADOS,
     CARPETA_ALERTAS_VIDEO,
     CARPETA_EN_VIVO,
     INTERVALO_REVISION_SEG,
     LADO_MINIMO_REGION
 )
-from modulo_imagen.recepcion import frames_desde_carpeta
 from modulo_imagen.pipeline import procesar_frame, OPCIONES_POR_DEFECTO
 from modulo_imagen.exportacion import generar_json, filas_csv
 from modulo_imagen.evaluacion import evaluar, resumen_por_escenario
@@ -115,12 +112,6 @@ def mostrar(imagen, titulo=None):
 def pastilla(texto, tipo="info"):
 
     return f"<span class='pastilla p-{tipo}'>{texto}</span>"
-
-
-@st.cache_data(show_spinner=False)
-def cargar_imagenes_prueba():
-
-    return list(frames_desde_carpeta(CARPETA_IMAGENES_PRUEBA))
 
 
 @st.cache_data(show_spinner="Analizando imagen...")
@@ -435,19 +426,6 @@ with st.sidebar:
     st.markdown("### 🖼️ Modulo IMAGEN")
     st.caption("Sistema de Supervision de Examenes")
 
-    fuente = st.radio(
-        "Fuente",
-        ["Alertas de VIDEO", "Imagenes de prueba"],
-        captions=["Capturas de la alarma de VIDEO", "Imagenes de respaldo"]
-    )
-
-    nombre_prueba = None
-
-    if fuente == "Imagenes de prueba":
-        nombre_prueba = st.selectbox(
-            "Imagen", [p["origen"] for p in cargar_imagenes_prueba()]
-        )
-
     st.divider()
     st.markdown("**Segmentacion**")
     segmentacion = st.selectbox(
@@ -488,7 +466,7 @@ st.markdown("""
 
 
 # ============================================================
-# MODO 1: ALERTAS DE VIDEO
+# PANEL DE ALERTAS DE VIDEO
 # ============================================================
 
 def ir_a(indice):
@@ -794,132 +772,103 @@ vista = st.segmented_control(
 
 
 # ============================================================
-# MODO 1: ALERTAS DE VIDEO
+# CONTENIDO: ALERTAS DE VIDEO
 # ============================================================
 
-if fuente == "Alertas de VIDEO":
+if vista == "Evaluacion comparativa":
 
-    if vista == "Evaluacion comparativa":
+    paquetes = []
 
-        paquetes = []
+    for nombre in vigilante.alertas_en_carpeta():
+        ruta = os.path.join(CARPETA_ALERTAS_VIDEO, nombre)
+        paquete = cargar_alerta(nombre, os.path.getmtime(ruta))
+        if paquete:
+            paquetes.append(paquete)
 
-        for nombre in vigilante.alertas_en_carpeta():
-            ruta = os.path.join(CARPETA_ALERTAS_VIDEO, nombre)
-            paquete = cargar_alerta(nombre, os.path.getmtime(ruta))
-            if paquete:
-                paquetes.append(paquete)
+    seccion_evaluacion(
+        paquetes,
+        os.path.join(CARPETA_EN_VIVO, "evaluacion_alertas_detalle.csv"),
+        "Sobre las capturas reales de la alarma de VIDEO."
+    )
 
-        seccion_evaluacion(
-            paquetes,
-            os.path.join(CARPETA_EN_VIVO, "evaluacion_alertas_detalle.csv"),
-            "Sobre las capturas reales de la alarma de VIDEO."
-        )
+elif vista == "Prueba de robustez":
 
-    elif vista == "Prueba de robustez":
+    archivos = vigilante.alertas_en_carpeta()
 
-        archivos = vigilante.alertas_en_carpeta()
-
-        if not archivos:
-            st.info("Aun no hay alertas de VIDEO.")
-        else:
-            actual = st.session_state.get("archivo_actual")
-            archivo = st.selectbox(
-                "Alerta", archivos,
-                index=archivos.index(actual) if actual in archivos else len(archivos) - 1
-            )
-            ruta = os.path.join(CARPETA_ALERTAS_VIDEO, archivo)
-            paquete = cargar_alerta(archivo, os.path.getmtime(ruta))
-
-            if paquete:
-                seccion_robustez(paquete, archivo)
-
+    if not archivos:
+        st.info("Aun no hay alertas de VIDEO.")
     else:
+        actual = st.session_state.get("archivo_actual")
+        archivo = st.selectbox(
+            "Alerta", archivos,
+            index=archivos.index(actual) if actual in archivos else len(archivos) - 1
+        )
+        ruta = os.path.join(CARPETA_ALERTAS_VIDEO, archivo)
+        paquete = cargar_alerta(archivo, os.path.getmtime(ruta))
 
-        panel_alertas()
-
-        archivo = st.session_state.get("archivo_actual")
-        ruta = os.path.join(CARPETA_ALERTAS_VIDEO, archivo) if archivo else None
-
-        if ruta and os.path.exists(ruta):
-
-            st.divider()
-            st.markdown(f"### Analisis de IMAGEN · `{archivo}`")
-
-            paquete = cargar_alerta(archivo, os.path.getmtime(ruta))
-
-            if paquete:
-                mostrar_analisis(procesar(paquete, opciones_clave), archivo)
-
-            # ------------------------------------------------
-            # Resumen de todas las alertas (salida para otros grupos)
-            # ------------------------------------------------
-
-            st.divider()
-            st.markdown("### Resumen de todas las alertas")
-            st.caption(
-                "Salida acumulada de IMAGEN: un registro por alerta procesada. "
-                "Es lo que otros modulos (por ejemplo, PREDICCION) pueden leer."
-            )
-
-            todas = list(reversed(vigilante.procesadas()))
-
-            st.dataframe(pd.DataFrame([
-                {
-                    "#": n + 1,
-                    "archivo": r["archivo"],
-                    "alarma": (r.get("alerta_video") or {}).get("objeto"),
-                    "fecha": (r.get("alerta_video") or {}).get("fecha"),
-                    "objetos": len(r["objetos"]),
-                    "confianza antes": r["resumen"]["comparacion_video"]["confianza_media_antes"],
-                    "confianza despues": r["resumen"]["comparacion_video"]["confianza_media_despues"],
-                    "brillo antes": r["calidad"]["capturado"]["brillo"],
-                    "brillo despues": r["calidad"]["mejorado"]["brillo"],
-                    "ruido antes": r["calidad"]["capturado"]["ruido"],
-                    "ruido despues": r["calidad"]["mejorado"]["ruido"]
-                }
-                for n, r in enumerate(todas)
-            ]), hide_index=True)
-
-            ruta_json = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.json")
-            ruta_csv = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.csv")
-
-            c1, c2, _ = st.columns([1, 1, 3])
-
-            if os.path.exists(ruta_json):
-                with open(ruta_json, "rb") as f:
-                    c1.download_button("Descargar JSON (todas)", f.read(),
-                                       file_name="resultados_alertas.json",
-                                       mime="application/json")
-
-            if os.path.exists(ruta_csv):
-                with open(ruta_csv, "rb") as f:
-                    c2.download_button("Descargar CSV (todas)", f.read(),
-                                       file_name="resultados_alertas.csv",
-                                       mime="text/csv")
-
-
-# ============================================================
-# MODO 2: IMAGENES DE PRUEBA
-# ============================================================
+        if paquete:
+            seccion_robustez(paquete, archivo)
 
 else:
 
-    paquetes = cargar_imagenes_prueba()
+    panel_alertas()
 
-    if vista == "Evaluacion comparativa":
+    archivo = st.session_state.get("archivo_actual")
+    ruta = os.path.join(CARPETA_ALERTAS_VIDEO, archivo) if archivo else None
 
-        seccion_evaluacion(
-            paquetes,
-            os.path.join(CARPETA_RESULTADOS, "evaluacion_detalle.csv"),
-            "Sobre las imagenes de prueba."
+    if ruta and os.path.exists(ruta):
+
+        st.divider()
+        st.markdown(f"### Analisis de IMAGEN · `{archivo}`")
+
+        paquete = cargar_alerta(archivo, os.path.getmtime(ruta))
+
+        if paquete:
+            mostrar_analisis(procesar(paquete, opciones_clave), archivo)
+
+        # ------------------------------------------------
+        # Resumen de todas las alertas (salida para otros grupos)
+        # ------------------------------------------------
+
+        st.divider()
+        st.markdown("### Resumen de todas las alertas")
+        st.caption(
+            "Salida acumulada de IMAGEN: un registro por alerta procesada. "
+            "Es lo que otros modulos (por ejemplo, PREDICCION) pueden leer."
         )
 
-    else:
+        todas = list(reversed(vigilante.procesadas()))
 
-        paquete = next(p for p in paquetes if p["origen"] == nombre_prueba)
+        st.dataframe(pd.DataFrame([
+            {
+                "#": n + 1,
+                "archivo": r["archivo"],
+                "alarma": (r.get("alerta_video") or {}).get("objeto"),
+                "fecha": (r.get("alerta_video") or {}).get("fecha"),
+                "objetos": len(r["objetos"]),
+                "confianza antes": r["resumen"]["comparacion_video"]["confianza_media_antes"],
+                "confianza despues": r["resumen"]["comparacion_video"]["confianza_media_despues"],
+                "brillo antes": r["calidad"]["capturado"]["brillo"],
+                "brillo despues": r["calidad"]["mejorado"]["brillo"],
+                "ruido antes": r["calidad"]["capturado"]["ruido"],
+                "ruido despues": r["calidad"]["mejorado"]["ruido"]
+            }
+            for n, r in enumerate(todas)
+        ]), hide_index=True)
 
-        if vista == "Prueba de robustez":
-            seccion_robustez(paquete, nombre_prueba)
-        else:
-            st.markdown(f"### Analisis de IMAGEN · `{nombre_prueba}`")
-            mostrar_analisis(procesar(paquete, opciones_clave), nombre_prueba)
+        ruta_json = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.json")
+        ruta_csv = os.path.join(CARPETA_EN_VIVO, "resultados_alertas.csv")
+
+        c1, c2, _ = st.columns([1, 1, 3])
+
+        if os.path.exists(ruta_json):
+            with open(ruta_json, "rb") as f:
+                c1.download_button("Descargar JSON (todas)", f.read(),
+                                   file_name="resultados_alertas.json",
+                                   mime="application/json")
+
+        if os.path.exists(ruta_csv):
+            with open(ruta_csv, "rb") as f:
+                c2.download_button("Descargar CSV (todas)", f.read(),
+                                   file_name="resultados_alertas.csv",
+                                   mime="text/csv")

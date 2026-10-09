@@ -51,8 +51,4 @@ python -m venv .venv
 iniciar_app.bat                                           # página web (doble clic)
 .venv\Scripts\python -m streamlit run app_imagen.py      # lo mismo, desde la terminal
 .venv\Scripts\python vigilar_alertas.py                 # vigilante sin interfaz
-.venv\Scripts\python procesar_imagenes.py                # lote -> resultados/
-.venv\Scripts\python evaluar_modulo.py                   # experimento comparativo
 ```
-
-Las imágenes de prueba están en `datos_prueba/imagenes/` (Pexels, licencia libre).

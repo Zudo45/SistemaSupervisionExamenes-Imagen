@@ -9,12 +9,6 @@ CARPETA_PROYECTO = os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))
 )
 
-CARPETA_IMAGENES_PRUEBA = os.path.join(
-    CARPETA_PROYECTO,
-    "datos_prueba",
-    "imagenes"
-)
-
 CARPETA_RESULTADOS = os.path.join(
     CARPETA_PROYECTO,
     "resultados"
