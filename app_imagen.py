@@ -767,11 +767,6 @@ def seccion_robustez(paquete, clave):
             }
             for o in objetos
         ]), hide_index=True)
-        st.caption(
-            "confirmada: lo ve en la degradada y en la procesada · recuperada: lo pierde "
-            "por la degradacion y lo vuelve a ver tras IMAGEN · no confirmada: lo pierde "
-            "tras IMAGEN · no detectada: no lo ve en ninguna."
-        )
 
     # Detecciones de la imagen degradada que no corresponden a ningun
     # objeto original (confusiones del modelo)
