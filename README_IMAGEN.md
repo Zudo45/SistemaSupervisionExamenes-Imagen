@@ -38,7 +38,16 @@ La página permite recorrer las alertas con las flechas ◀ ▶ o con las miniat
 
 `calibrar_video.py` mide, con la cámara y sin guardar imágenes, cómo responde el modelo de VIDEO a cada objeto; sus resultados (`calibracion/calibracion_video.json`) muestran que la detección parpadea entre fotogramas en una webcam.
 
-## Instalación
+## Inicio rápido (Windows)
+
+1. Instalar **Python 3.12** marcando "Add Python to PATH".
+2. Descargar el repositorio (`git clone` o botón **Code → Download ZIP**).
+3. Doble clic en **`iniciar_app.bat`**: la primera vez crea el entorno e instala las librerías (tarda varios minutos); luego abre la página en `http://localhost:8501`.
+4. Doble clic en **`iniciar_video.bat`** para ejecutar el sistema de VIDEO con la cámara. Al mostrar un objeto no permitido durante 5 segundos suena la alarma, la captura se guarda en `alertas/` y la página la procesa automáticamente.
+
+Si ya se tienen capturas de la alarma de VIDEO, basta con copiarlas a `alertas/` sin cambiarles el nombre.
+
+## Instalación manual
 
 ```
 python -m venv .venv
@@ -49,6 +58,7 @@ python -m venv .venv
 
 ```
 iniciar_app.bat                                           # página web (doble clic)
+iniciar_video.bat                                         # sistema de VIDEO (doble clic)
 .venv\Scripts\python -m streamlit run app_imagen.py      # lo mismo, desde la terminal
 .venv\Scripts\python vigilar_alertas.py                 # vigilante sin interfaz
 ```
