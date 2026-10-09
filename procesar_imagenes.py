@@ -22,7 +22,7 @@ from modulo_imagen.recepcion import (
 )
 from modulo_imagen.pipeline import procesar_frame
 from modulo_imagen.exportacion import guardar_resultados
-from modulo_imagen.visualizacion import dibujar_verificadas
+from modulo_imagen.visualizacion import dibujar_video
 
 
 def ejecutar(fuente):
@@ -56,9 +56,9 @@ def ejecutar(fuente):
             f"({time.time() - inicio:.1f}s)"
         )
 
-        anotada = dibujar_verificadas(
+        anotada = dibujar_video(
             resultado["imagenes"]["mejorado"],
-            [o["deteccion"] for o in resultado["objetos"]]
+            resultado["detecciones_despues"]
         )
 
         nombre = os.path.splitext(paquete["origen"])[0]

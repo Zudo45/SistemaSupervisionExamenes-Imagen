@@ -29,7 +29,6 @@ from modulo_imagen import vigilante
 from modulo_imagen.verificacion import emparejar
 from modulo_imagen.visualizacion import (
     dibujar_video,
-    dibujar_verificadas,
     superponer_mascara,
     histograma_gris,
     a_rgb
@@ -366,7 +365,7 @@ def mostrar_analisis(resultado, clave):
             mostrar(dibujar_video(imagenes["capturado"], resultado["detecciones_capturado"]),
                     "Antes: VIDEO sobre la imagen recibida")
         with c2:
-            mostrar(dibujar_verificadas(imagenes["mejorado"], [o["deteccion"] for o in objetos]),
+            mostrar(dibujar_video(imagenes["mejorado"], resultado["detecciones_despues"]),
                     "Despues: VIDEO sobre la imagen procesada por IMAGEN")
 
         comparacion = resultado["resumen"]["comparacion_video"]
@@ -573,7 +572,7 @@ def panel_alertas():
                  caption="Captura de VIDEO con sus detecciones")
     with i2:
         st.image(actual["imagenes"]["procesada"], width="stretch",
-                 caption="Procesada por IMAGEN · detecciones de VIDEO verificadas")
+                 caption="Procesada por IMAGEN · lo que VIDEO detecta en ella")
 
     st.markdown(
         pastilla(f"Alarma: {actual['alerta_video']['objeto']}", "alerta")
@@ -738,8 +737,8 @@ def seccion_robustez(paquete, clave):
         mostrar(dibujar_video(imagenes["capturado"], resultado["detecciones_capturado"]),
                 "2 · Degradada (lo que VIDEO veria)")
     with c3:
-        mostrar(dibujar_verificadas(imagenes["mejorado"], [o["deteccion"] for o in objetos]),
-                "3 · Procesada por IMAGEN")
+        mostrar(dibujar_video(imagenes["mejorado"], resultado["detecciones_despues"]),
+                "3 · Procesada por IMAGEN (lo que VIDEO detecta)")
 
     if resultado["decisiones"]:
         st.markdown("**Decisiones del preprocesamiento adaptativo**")
@@ -749,7 +748,7 @@ def seccion_robustez(paquete, clave):
     d1, d2 = st.columns(2)
 
     with d1:
-        st.markdown("**Calidad de imagen** (no involucra a VIDEO)")
+        st.markdown("**Calidad de imagen**")
         tabla = tabla_calidad(resultado["calidad"]).rename(
             columns={"antes": "degradada", "despues": "procesada"}
         )

@@ -21,7 +21,7 @@ from modulo_imagen.config_imagen import (
 from modulo_imagen.recepcion import redimensionar, EXTENSIONES_IMAGEN
 from modulo_imagen.pipeline import procesar_frame
 from modulo_imagen.exportacion import resultado_a_dict, guardar_resultados_dicts
-from modulo_imagen.visualizacion import dibujar_video, dibujar_verificadas
+from modulo_imagen.visualizacion import dibujar_video
 
 
 PATRON_ALERTA = re.compile(
@@ -182,8 +182,8 @@ def procesar_alerta(nombre_archivo, opciones=None):
     cv2.imwrite(rutas["original"], dibujar_video(
         imagenes["capturado"], resultado["registro_video"]["detecciones"]
     ))
-    cv2.imwrite(rutas["procesada"], dibujar_verificadas(
-        imagenes["mejorado"], [o["deteccion"] for o in resultado["objetos"]]
+    cv2.imwrite(rutas["procesada"], dibujar_video(
+        imagenes["mejorado"], resultado["detecciones_despues"]
     ))
 
     datos = {

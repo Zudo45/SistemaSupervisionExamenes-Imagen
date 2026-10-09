@@ -7,14 +7,8 @@ import cv2
 import numpy as np
 
 
-# Colores BGR por estado de verificacion
-COLORES_ESTADO = {
-    "video": (255, 140, 0),          # azul: deteccion original
-    "confirmada": (60, 180, 60),     # verde
-    "no_confirmada": (0, 165, 255),  # naranja
-    "recuperada": (220, 0, 220),     # magenta
-    "no_detectada": (128, 128, 128)  # gris
-}
+# Color BGR de las detecciones de VIDEO
+COLOR_VIDEO = (255, 140, 0)
 
 
 def _grosor(imagen):
@@ -46,27 +40,7 @@ def dibujar_video(imagen, detecciones):
     salida = imagen.copy()
 
     for d in detecciones:
-        dibujar_caja(salida, d, COLORES_ESTADO["video"], f"{d['clase']} {d['confianza']:.2f}")
-
-    return salida
-
-
-def dibujar_verificadas(imagen, verificadas):
-
-    salida = imagen.copy()
-
-    for d in verificadas:
-
-        if d["estado"] == "confirmada":
-            texto = f"{d['clase']} {d['confianza_capturada']:.2f}->{d['confianza_procesada']:.2f}"
-        elif d["estado"] == "recuperada":
-            texto = f"{d['clase']} 0->{d['confianza_procesada']:.2f} (recuperada)"
-        elif d["estado"] == "no_confirmada":
-            texto = f"{d['clase']} {d['confianza_capturada']:.2f} (no confirmada)"
-        else:
-            texto = f"{d['clase']} (no detectada)"
-
-        dibujar_caja(salida, d, COLORES_ESTADO[d["estado"]], texto)
+        dibujar_caja(salida, d, COLOR_VIDEO, f"{d['clase']} {d['confianza']:.2f}")
 
     return salida
 
