@@ -123,8 +123,21 @@ def procesadas():
         if not archivo.endswith(".json"):
             continue
 
-        with open(os.path.join(CARPETA_DATOS, archivo), "r", encoding="utf-8") as f:
-            resultados.append(json.load(f))
+        ruta = os.path.join(CARPETA_DATOS, archivo)
+
+        with open(ruta, "r", encoding="utf-8") as f:
+            datos = json.load(f)
+
+        # Si la captura ya no esta en la carpeta de alertas, se
+        # descartan sus resultados
+        if not os.path.exists(os.path.join(CARPETA_ALERTAS_VIDEO, datos["archivo"])):
+            os.remove(ruta)
+            for imagen in datos.get("imagenes", {}).values():
+                if os.path.exists(imagen):
+                    os.remove(imagen)
+            continue
+
+        resultados.append(datos)
 
     return sorted(resultados, key=lambda r: r["procesado_en"], reverse=True)
 
