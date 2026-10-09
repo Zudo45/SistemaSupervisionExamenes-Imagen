@@ -26,6 +26,7 @@ from modulo_imagen.evaluacion import evaluar, resumen_por_escenario
 from modulo_imagen.segmentacion import aislar_objeto
 from modulo_imagen.mejoramiento import ampliar
 from modulo_imagen import vigilante
+from modulo_imagen.verificacion import emparejar
 from modulo_imagen.visualizacion import (
     dibujar_video,
     dibujar_verificadas,
@@ -449,13 +450,6 @@ with st.sidebar:
         )
 
     st.divider()
-    st.markdown("**Condiciones de captura (simulacion)**")
-    st.caption("Empeoran la captura a proposito para ver como la recupera IMAGEN.")
-
-    oscuridad = st.slider("Poca luz", 0.0, 0.9, 0.0, 0.05)
-    ruido_simulado = st.slider("Ruido de sensor", 0, 60, 0, 5)
-    desenfoque = st.slider("Desenfoque", 0, 21, 0, 1)
-
     st.markdown("**Segmentacion**")
     segmentacion = st.selectbox(
         "Metodo de segmentacion",
@@ -469,16 +463,10 @@ with st.sidebar:
     st.code(f"http://{ip_local()}:8501", language=None)
 
 
-opciones = {
-    "oscuridad": oscuridad,
-    "ruido_simulado": ruido_simulado,
-    "desenfoque": desenfoque,
-    "segmentacion": segmentacion
-}
+# El analisis principal trabaja siempre sobre la captura real de VIDEO
+opciones = {"segmentacion": segmentacion}
 
 opciones_clave = tuple(sorted({**OPCIONES_POR_DEFECTO, **opciones}.items()))
-
-simulacion_activa = bool(oscuridad or ruido_simulado or desenfoque)
 
 
 # ============================================================
@@ -701,21 +689,112 @@ def seccion_evaluacion(paquetes, ruta_detalle, descripcion):
         st.dataframe(tabla, hide_index=True)
 
 
-def aviso_simulacion():
+# ============================================================
+# PRUEBA DE ROBUSTEZ (experimento)
+# Se empeora a proposito la captura y se mide si el procesamiento
+# de IMAGEN la recupera. El modelo de VIDEO se usa sin cambios,
+# solo para medir que detecta en cada imagen.
+# ============================================================
 
-    if simulacion_activa:
-        partes = []
-        if oscuridad:
-            partes.append(f"poca luz {oscuridad:.2f}")
-        if ruido_simulado:
-            partes.append(f"ruido {ruido_simulado}")
-        if desenfoque:
-            partes.append(f"desenfoque {desenfoque}")
-        st.warning("Simulacion activa sobre la captura: " + ", ".join(partes))
+def seccion_robustez(paquete, clave):
+
+    st.markdown(f"### Prueba de robustez · `{paquete['origen']}`")
+    st.caption(
+        "Experimento: ¿que pasaria si la camara de VIDEO hubiera capturado una imagen "
+        "oscura, con ruido o borrosa? Se degrada la captura a proposito y se compara "
+        "con la imagen procesada por IMAGEN. La deteccion de VIDEO no se modifica: su "
+        "modelo solo se usa para medir que reconoce en cada imagen."
+    )
+
+    s1, s2, s3 = st.columns(3)
+
+    oscuridad = s1.slider("Poca luz", 0.0, 0.9, 0.0, 0.05, key=f"luz_{clave}")
+    ruido_simulado = s2.slider("Ruido de sensor", 0, 60, 0, 5, key=f"ruido_{clave}")
+    desenfoque = s3.slider("Desenfoque", 0, 20, 0, 1, key=f"desenfoque_{clave}")
+
+    if not (oscuridad or ruido_simulado or desenfoque):
+        st.info("Mueve uno de los controles para degradar la captura.")
+        return
+
+    opciones_prueba = tuple(sorted({
+        **OPCIONES_POR_DEFECTO,
+        **opciones,
+        "oscuridad": oscuridad,
+        "ruido_simulado": ruido_simulado,
+        "desenfoque": desenfoque
+    }.items()))
+
+    resultado = procesar(paquete, opciones_prueba)
+
+    imagenes = resultado["imagenes"]
+    objetos = resultado["objetos"]
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        mostrar(dibujar_video(imagenes["original"], resultado["registro_video"]["detecciones"]),
+                "1 · Captura original de VIDEO")
+    with c2:
+        mostrar(dibujar_video(imagenes["capturado"], resultado["detecciones_capturado"]),
+                "2 · Degradada (lo que VIDEO veria)")
+    with c3:
+        mostrar(dibujar_verificadas(imagenes["mejorado"], [o["deteccion"] for o in objetos]),
+                "3 · Procesada por IMAGEN")
+
+    if resultado["decisiones"]:
+        st.markdown("**Decisiones del preprocesamiento adaptativo**")
+        for decision in resultado["decisiones"]:
+            st.markdown(f"- {decision}")
+
+    d1, d2 = st.columns(2)
+
+    with d1:
+        st.markdown("**Calidad de imagen** (no involucra a VIDEO)")
+        tabla = tabla_calidad(resultado["calidad"]).rename(
+            columns={"antes": "degradada", "despues": "procesada"}
+        )
+        st.dataframe(tabla)
+        st.caption("PSNR y SSIM comparan con la captura original: mas alto = mas parecida.")
+
+    with d2:
+        st.markdown("**Que reconoce el modelo de VIDEO** (sin cambios)")
+        st.dataframe(pd.DataFrame([
+            {
+                "clase": o["deteccion"]["clase"],
+                "original": o["deteccion"]["confianza_video"],
+                "degradada": o["deteccion"]["confianza_capturada"],
+                "procesada": o["deteccion"]["confianza_procesada"],
+                "estado": o["deteccion"]["estado"]
+            }
+            for o in objetos
+        ]), hide_index=True)
+        st.caption(
+            "confirmada: lo ve en la degradada y en la procesada · recuperada: lo pierde "
+            "por la degradacion y lo vuelve a ver tras IMAGEN · no confirmada: lo pierde "
+            "tras IMAGEN · no detectada: no lo ve en ninguna."
+        )
+
+    # Detecciones de la imagen degradada que no corresponden a ningun
+    # objeto original (confusiones del modelo)
+    emparejadas = set(emparejar(
+        resultado["registro_video"]["detecciones"], resultado["detecciones_capturado"]
+    ).values())
+
+    otras = [
+        d for j, d in enumerate(resultado["detecciones_capturado"])
+        if j not in emparejadas
+    ]
+
+    if otras:
+        st.caption(
+            "En la imagen degradada VIDEO tambien reporta: "
+            + ", ".join(f"{d['clase']} ({d['confianza']:.2f})" for d in otras)
+            + ". Son confusiones causadas por la degradacion."
+        )
 
 
 vista = st.segmented_control(
-    "Vista", ["Analisis", "Evaluacion comparativa"],
+    "Vista", ["Analisis", "Prueba de robustez", "Evaluacion comparativa"],
     default="Analisis", label_visibility="collapsed"
 ) or "Analisis"
 
@@ -742,6 +821,24 @@ if fuente == "Alertas de VIDEO":
             "Sobre las capturas reales de la alarma de VIDEO."
         )
 
+    elif vista == "Prueba de robustez":
+
+        archivos = vigilante.alertas_en_carpeta()
+
+        if not archivos:
+            st.info("Aun no hay alertas de VIDEO.")
+        else:
+            actual = st.session_state.get("archivo_actual")
+            archivo = st.selectbox(
+                "Alerta", archivos,
+                index=archivos.index(actual) if actual in archivos else len(archivos) - 1
+            )
+            ruta = os.path.join(CARPETA_ALERTAS_VIDEO, archivo)
+            paquete = cargar_alerta(archivo, os.path.getmtime(ruta))
+
+            if paquete:
+                seccion_robustez(paquete, archivo)
+
     else:
 
         panel_alertas()
@@ -753,7 +850,6 @@ if fuente == "Alertas de VIDEO":
 
             st.divider()
             st.markdown(f"### Analisis de IMAGEN · `{archivo}`")
-            aviso_simulacion()
 
             paquete = cargar_alerta(archivo, os.path.getmtime(ruta))
 
@@ -828,7 +924,8 @@ else:
 
         paquete = next(p for p in paquetes if p["origen"] == nombre_prueba)
 
-        st.markdown(f"### Analisis de IMAGEN · `{nombre_prueba}`")
-        aviso_simulacion()
-
-        mostrar_analisis(procesar(paquete, opciones_clave), nombre_prueba)
+        if vista == "Prueba de robustez":
+            seccion_robustez(paquete, nombre_prueba)
+        else:
+            st.markdown(f"### Analisis de IMAGEN · `{nombre_prueba}`")
+            mostrar_analisis(procesar(paquete, opciones_clave), nombre_prueba)
